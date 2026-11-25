@@ -216,18 +216,30 @@ export class ProtectStreamingDelegate implements CameraStreamingDelegate, Stream
   // Internal development only: alternates the resolved transport source between the timeshift buffer and RTSP when Debug.Video.Stream.ABTest is enabled, so a live
   // A/B comparison can run without restarting the plugin.
   private abTest = false;
+  private readonly nativeLiveOverride?: { channel: ChannelProfile; height: number; width: number };
   private readonly nativeLiveFormats: readonly NativeLiveFormat[];
 
   // Create an instance of a HomeKit streaming delegate. The derived audio half - the recording audio format the camera's derivation read from its livestream and the
   // probe subscription that read it - defaults to nothing read, which advertises the stand-in and hands the supervisor nothing to adopt.
   constructor(protectCamera: ProtectCameraHost, resolutions: Resolution[],
-    derived: Pick<AdvertisedStreams, "audioFormat" | "probe"> & Pick<AdvertisedStreams, "nativeLiveFormats"> = { audioFormat: null,
+    derived: Pick<AdvertisedStreams, "audioFormat" | "probe"> & Partial<Pick<AdvertisedStreams, "nativeLiveFormats" | "profiles">> = { audioFormat: null,
       probe: null }) {
 
     // The recording audio format we advertise, computed from the stream the derivation read by the one helper the supervisor's restart hint also compares through.
     const advertised = recordingAdvertisementOf(derived.audioFormat);
 
     this.nativeLiveFormats = derived.nativeLiveFormats ?? [];
+    const override = protectCamera.hasFeature("Video.NativeLive") && protectCamera.hints.nativeLiveOverride?.match(/^(\d+)x(\d+)\/(High|Medium|Low)$/i);
+
+    if(override) {
+
+      const channel = derived.profiles?.find(entry => entry.channel.name.toLowerCase() === override[3]?.toLowerCase());
+
+      if(channel) {
+
+        this.nativeLiveOverride = { channel, height: Number(override[2]), width: Number(override[1]) };
+      }
+    }
 
     const liveProfiles = [...new Set(this.nativeLiveFormats.map(format => format.profile))];
     const liveLevel = this.nativeLiveFormats.reduce<H264Level>((highest, format) => (format.level > highest) ? format.level : highest, H264Level.LEVEL3_1);
@@ -787,10 +799,15 @@ export class ProtectStreamingDelegate implements CameraStreamingDelegate, Stream
 
     // Find the best RTSP stream based on what we're looking for. The dimensions and the posture are a pure policy; the selection call and the host's source-pixel cap -
     // a hardware capability rather than a decision, applied with the higher posture alone - stay here.
-    const exactSources = !isHighLatency && !this.protectCamera.hints.crop && (this.protectCamera.ufp.videoCodec === "h264") ?
+    const localCopy = !isHighLatency && !this.protectCamera.hints.crop && (this.protectCamera.ufp.videoCodec === "h264");
+    const override = this.nativeLiveOverride;
+    const preferred = localCopy && (override?.channel.channel.fps === request.video.fps) &&
+      (((override.width === request.video.width) && (override.height === request.video.height)) ||
+       ((override.channel.channel.width === request.video.width) && (override.channel.channel.height === request.video.height))) ? override.channel : undefined;
+    const exactSources = localCopy ?
       this.nativeLiveFormats.filter(({ channel: { channel } }) => (channel.width === request.video.width) && (channel.height === request.video.height) &&
         (channel.fps === request.video.fps)) : [];
-    const nativeLive = exactSources.find(({ level, profile }) => (profile === request.video.profile) && (level <= request.video.level))?.channel;
+    const nativeLive = preferred ?? exactSources.find(({ level, profile }) => (profile === request.video.profile) && (level <= request.video.level))?.channel;
     const source = exactSources[0];
     const exactChannel = nativeLive ?? source?.channel;
     const isTranscoding = needsTranscode && !nativeLive;

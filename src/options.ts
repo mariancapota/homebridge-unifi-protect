@@ -311,6 +311,7 @@ export const featureOptions: Record<string, FeatureOptionEntry<ProtectOptionMeta
   "Video": [
 
     { default: false, description: "Serve an exact native H.264 channel for local live views when available.", name: "NativeLive" },
+    { default: false, defaultValue: "", description: "For compatible local clients, serve a native H.264 channel for a tested request size (for example 1280x720/High). The video can exceed the dimensions, profile, or bitrate requested.", group: "NativeLive", name: "NativeLive.Override", scopes: ["device"] },
 
     { default: false, defaultValue: "", description: "Path to the FFmpeg executable HBUP uses for streaming and recording. Default: the bundled FFmpeg build for your platform, or the first FFmpeg found in your path.", inputSize: 40, name: "FFmpeg.Path", scopes: ["global"] },
     { default: true, description: "Use hardware-accelerated transcoding when available (Apple Macs, Intel Quick Sync Video-enabled CPUs, Raspberry Pi 4).", name: "Transcode.Hardware" },

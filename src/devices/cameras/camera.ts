@@ -120,6 +120,7 @@ export interface ProtectCameraHints extends ProtectHints {
   transcode: boolean;
 
   // The target bitrate, in kilobits per second, used when transcoding; -1 leaves the bitrate unconstrained.
+  nativeLiveOverride?: string;
   nativeRecordingBitratePair?: string;
   transcodeBitrate: number;
 
@@ -268,6 +269,7 @@ export class ProtectCamera extends ProtectDevice<Camera> implements ProtectCamer
       ledStatus: this.ufp.featureFlags.hasLedStatus && this.hasFeature("Device.StatusLed"),
       logDoorbell: this.hasFeature("Log.Doorbell"),
       logHksv: this.hasFeature("Log.HKSV"),
+      nativeLiveOverride: this.getFeatureValue("Video.NativeLive.Override") ?? undefined,
       nativeRecordingBitratePair: this.getFeatureValue("Video.HKSV.Recording.Native.BitratePair") ?? undefined,
       nightVision: this.ufp.featureFlags.hasInfrared && this.hasFeature("Device.NightVision"),
 
