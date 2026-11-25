@@ -21,6 +21,7 @@ import { nightVisionActive, nightVisionBrightnessForMode, nightVisionCommandForL
 import type { AmbientLightCapability } from "./ambient-light.ts";
 import type { DoorbellCapability } from "./doorbell.ts";
 import type { LivestreamSubscription } from "../../media/livestream.ts";
+import type { NativeLiveFormat } from "../../media/native-recording.ts";
 import type { NightVisionCommand } from "./night-vision-policy.ts";
 import type { Nullable } from "homebridge-plugin-utils";
 import { ProtectAuthorizationError } from "unifi-protect";
@@ -35,6 +36,7 @@ import type { StreamingCapability } from "./streaming.ts";
 import { configured } from "../device-base.ts";
 import { isolateAccessoryChange } from "../../nvr/nvr-accessory-change.ts";
 import { mqttTopics } from "../../mqtt.ts";
+import { nativeLiveFormat } from "../../media/native-recording.ts";
 
 // The source tag threaded through the capability-reconcile and doorbell-capability methods: "construct" marks establishment (a fresh adoption or a Homebridge
 // restart), "observe" a live reconcile. The establishment-only side effects - the Access lock's SECURED resting stamp and the night vision dimmer's value push - branch
@@ -53,6 +55,7 @@ type ReconcileSource = "construct" | "observe";
 export interface AdvertisedStreams {
 
   audioFormat: LivestreamAudioFormat | null;
+  nativeLiveFormats?: readonly NativeLiveFormat[];
   probe: { profile: ChannelProfile; subscription: LivestreamSubscription } | null;
   profiles: ChannelProfile[];
   resolutions: Resolution[];
@@ -117,6 +120,7 @@ export interface ProtectCameraHints extends ProtectHints {
   transcode: boolean;
 
   // The target bitrate, in kilobits per second, used when transcoding; -1 leaves the bitrate unconstrained.
+  nativeRecordingBitratePair?: string;
   transcodeBitrate: number;
 
   // Whether high-latency transcoding settings apply to this camera's stream.
@@ -264,6 +268,7 @@ export class ProtectCamera extends ProtectDevice<Camera> implements ProtectCamer
       ledStatus: this.ufp.featureFlags.hasLedStatus && this.hasFeature("Device.StatusLed"),
       logDoorbell: this.hasFeature("Log.Doorbell"),
       logHksv: this.hasFeature("Log.HKSV"),
+      nativeRecordingBitratePair: this.getFeatureValue("Video.HKSV.Recording.Native.BitratePair") ?? undefined,
       nightVision: this.ufp.featureFlags.hasInfrared && this.hasFeature("Device.NightVision"),
 
       // A regular camera stream is dense and continuous, so a modest probe is enough for FFmpeg to lock onto its format reliably without adding noticeable startup
@@ -1530,6 +1535,22 @@ export class ProtectCamera extends ProtectDevice<Camera> implements ProtectCamer
 
     const recordingAudio = await this.#probeRecordingAudio(profiles);
 
+    const nativeLiveResults = (!this.stream && this.isReachable && this.hasFeature("Video.NativeLive")) ?
+      await Promise.allSettled(nativeEntries.map(async channel => {
+
+        const existing = recordingAudio.probe;
+
+        if((existing?.profile.channel.id === channel.channel.id) && (existing.profile.lens === channel.lens)) {
+
+          return nativeLiveFormat(existing.subscription.initSegment?.description, channel);
+        }
+
+        await using source = this.livestream(channel, { discardOnDispose: true, signal: this.observeSignal });
+
+        return (await source.whenEstablished()) ? nativeLiveFormat(source.initSegment?.description, channel) : null;
+      })) : [];
+    const nativeLiveFormats = nativeLiveResults.flatMap(result => (result.status === "fulfilled") && result.value ? [result.value] : []);
+
     // The camera can be removed while the probe waits on its stream, the same exposure the RTSP write above carries across its await. A vanished camera has nothing to
     // derive, and handing back a surface would build a controller against a record that is gone, so any probe still held is released with it.
     if(!this.recordPresent) {
@@ -1541,7 +1562,8 @@ export class ProtectCamera extends ProtectDevice<Camera> implements ProtectCamer
 
     // Hand back the derived surface: the recording audio format and the probe that read it, the supported profiles with their URLs, and the resolution list the
     // CameraController is built from.
-    return { ...recordingAudio, profiles: profiles, resolutions: profiles.map(profile => profile.resolution) };
+    return { ...recordingAudio, ...(nativeLiveFormats.length ? { nativeLiveFormats } : {}), profiles: profiles,
+      resolutions: profiles.map(profile => profile.resolution) };
   }
 
   /* Read the audio format this camera's livestream carries, so HomeKit Secure Video is told the format the camera actually records in. The read is upfront, in the

@@ -4,6 +4,7 @@
  */
 import type { Clock, HomebridgePluginLogging, Nullable } from "homebridge-plugin-utils";
 import type { LivestreamAudioFormat, LivestreamVideoFormat } from "./stream-delegate.ts";
+import type { LivestreamDescription, Segment } from "unifi-protect";
 import { PROTECT_LIVESTREAM_ACTIVE_TOLERANCE_MS, PROTECT_LIVESTREAM_API_IDR_INTERVAL, PROTECT_LIVESTREAM_IDLE_TOLERANCE_MS, PROTECT_SEGMENT_RESOLUTION }
   from "../settings.ts";
 import { findKeyframe, formatErrorMessage, startsWithKeyframe } from "homebridge-plugin-utils";
@@ -14,7 +15,6 @@ import { LIVE_SELF_HEAL_THRESHOLD } from "./livestream-recovery-policy.ts";
 import type { LivestreamSubscription } from "./livestream.ts";
 import type { ProtectCameraHost } from "./camera-host.ts";
 import { ProtectLivestreamUnavailableError } from "unifi-protect";
-import type { Segment } from "unifi-protect";
 import { logLivestreamIterationError } from "./livestream.ts";
 
 // Why the standing buffer stopped, carried by the `stopped` event. "ended" is a recoverable end - a deliberate stop, a codec-change restart, or an unexpected iterator
@@ -633,6 +633,11 @@ export class ProtectTimeshiftBuffer extends EventEmitter<TimeshiftBufferEvents> 
 
   // Return the video format the running livestream carries, read from its init segment's description, or null when the buffer is not running or the stream has no
   // readable video track. The supervisor's hardware decoder check reads it as the identity of the stream it checks.
+  public get streamDescription(): LivestreamDescription | undefined {
+
+    return this.subscription?.initSegment?.description;
+  }
+
   public get videoFormat(): LivestreamVideoFormat | null {
 
     return this.subscription?.initSegment ? livestreamVideoFormat(this.subscription.initSegment.description) : null;

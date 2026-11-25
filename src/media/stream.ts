@@ -20,6 +20,7 @@ import { resolveChannelRequest, resolveTranscodeDecision, resolveVideoEncoding }
 import type { AdvertisedStreams } from "../devices/cameras/camera.ts";
 import type { ChannelProfile } from "./resolution.ts";
 import type { LivestreamSubscription } from "./livestream.ts";
+import type { NativeLiveFormat } from "./native-recording.ts";
 import { ProtectAbortedError } from "unifi-protect";
 import type { ProtectCameraHost } from "./camera-host.ts";
 import type { ProtectNvr } from "../nvr/nvr.ts";
@@ -31,6 +32,7 @@ import type { TalkbackSession } from "unifi-protect";
 import { liveViewOnFailed } from "./stream-ffmpeg-process.ts";
 import { logLivestreamIterationError } from "./livestream.ts";
 import { mqttTopics } from "../mqtt.ts";
+import { nativeRecordingFormat } from "./native-recording.ts";
 import { resolveSessionSource } from "./stream-source-policy.ts";
 
 interface OngoingSessionEntry {
@@ -214,14 +216,24 @@ export class ProtectStreamingDelegate implements CameraStreamingDelegate, Stream
   // Internal development only: alternates the resolved transport source between the timeshift buffer and RTSP when Debug.Video.Stream.ABTest is enabled, so a live
   // A/B comparison can run without restarting the plugin.
   private abTest = false;
+  private readonly nativeLiveFormats: readonly NativeLiveFormat[];
 
   // Create an instance of a HomeKit streaming delegate. The derived audio half - the recording audio format the camera's derivation read from its livestream and the
   // probe subscription that read it - defaults to nothing read, which advertises the stand-in and hands the supervisor nothing to adopt.
-  constructor(protectCamera: ProtectCameraHost, resolutions: Resolution[], derived: Pick<AdvertisedStreams, "audioFormat" | "probe"> = { audioFormat: null,
-    probe: null }) {
+  constructor(protectCamera: ProtectCameraHost, resolutions: Resolution[],
+    derived: Pick<AdvertisedStreams, "audioFormat" | "probe"> & Pick<AdvertisedStreams, "nativeLiveFormats"> = { audioFormat: null,
+      probe: null }) {
 
     // The recording audio format we advertise, computed from the stream the derivation read by the one helper the supervisor's restart hint also compares through.
     const advertised = recordingAdvertisementOf(derived.audioFormat);
+
+    this.nativeLiveFormats = derived.nativeLiveFormats ?? [];
+
+    const liveProfiles = [...new Set(this.nativeLiveFormats.map(format => format.profile))];
+    const liveLevel = this.nativeLiveFormats.reduce<H264Level>((highest, format) => (format.level > highest) ? format.level : highest, H264Level.LEVEL3_1);
+    const highProfileOnly = (liveProfiles.length === 1) && (liveProfiles[0] === H264Profile.HIGH);
+    const native = protectCamera.hasFeature("Video.HKSV.Recording.Native") && !protectCamera.hints.crop ?
+      nativeRecordingFormat(derived.probe?.subscription.initSegment?.description, derived.probe?.profile ?? null) : null;
 
     this.builtFor = controllerIdentityOf(protectCamera);
     this.hap = protectCamera.api.hap;
@@ -319,11 +331,11 @@ export class ProtectStreamingDelegate implements CameraStreamingDelegate, Stream
               // Through admittedly anecdotal testing on various G3 and G4 models, UniFi Protect seems to support only the H.264 Main profile, though it does support
               // various H.264 levels, ranging from Level 3 through Level 5.1 (G4 Pro at maximum resolution). However, HomeKit only supports Level 3.1, 3.2, and 4.0
               // currently.
-              levels: [ H264Level.LEVEL3_1, H264Level.LEVEL3_2, H264Level.LEVEL4_0 ],
+              levels: native ? [native.level] : [ H264Level.LEVEL3_1, H264Level.LEVEL3_2, H264Level.LEVEL4_0 ],
               profiles: [H264Profile.MAIN]
             },
 
-            resolutions: resolutions,
+            resolutions: native ? [native.resolution] : resolutions,
 
             type: VideoCodecType.H264
           }
@@ -366,8 +378,8 @@ export class ProtectStreamingDelegate implements CameraStreamingDelegate, Stream
             // Through admittedly anecdotal testing on various G3 and G4 models, UniFi Protect seems to support only the H.264 Main profile, though it does support
             // various H.264 levels, ranging from Level 3 through Level 5.1 (G4 Pro at maximum resolution). However, HomeKit only supports Level 3.1, 3.2, and 4.0
             // currently.
-            levels: [ H264Level.LEVEL3_1, H264Level.LEVEL3_2, H264Level.LEVEL4_0 ],
-            profiles: [H264Profile.MAIN]
+            levels: highProfileOnly ? [liveLevel] : [ H264Level.LEVEL3_1, H264Level.LEVEL3_2, H264Level.LEVEL4_0 ],
+            profiles: highProfileOnly ? [H264Profile.HIGH] : [...new Set([ H264Profile.MAIN, ...liveProfiles ])]
           },
 
           // Retrieve the list of supported resolutions from the camera and apply our best guesses for how to map specific resolutions to the available RTSP streams on a
@@ -702,7 +714,7 @@ export class ProtectStreamingDelegate implements CameraStreamingDelegate, Stream
 
     // Decide whether this session re-encodes the video, and read the connection's latency from the negotiated audio packet time. Both are a pure policy over the user's
     // configured hints and the camera's codec - stream-encode-policy.ts carries the full rationale for each circumstance that forces a transcode.
-    const { isHighLatency, isTranscoding } = resolveTranscodeDecision({
+    const { isHighLatency, isTranscoding: needsTranscode } = resolveTranscodeDecision({
 
       crop: this.protectCamera.hints.crop,
       packetTime: request.audio.packet_time,
@@ -775,6 +787,26 @@ export class ProtectStreamingDelegate implements CameraStreamingDelegate, Stream
 
     // Find the best RTSP stream based on what we're looking for. The dimensions and the posture are a pure policy; the selection call and the host's source-pixel cap -
     // a hardware capability rather than a decision, applied with the higher posture alone - stay here.
+    const exactSources = !isHighLatency && !this.protectCamera.hints.crop && (this.protectCamera.ufp.videoCodec === "h264") ?
+      this.nativeLiveFormats.filter(({ channel: { channel } }) => (channel.width === request.video.width) && (channel.height === request.video.height) &&
+        (channel.fps === request.video.fps)) : [];
+    const nativeLive = exactSources.find(({ level, profile }) => (profile === request.video.profile) && (level <= request.video.level))?.channel;
+    const source = exactSources[0];
+    const exactChannel = nativeLive ?? source?.channel;
+    const isTranscoding = needsTranscode && !nativeLive;
+
+    if(isTranscoding && source) {
+
+      this.log.info("Native live channel %s requires H.264 profile/level %d/%d. Client requested %d/%d; transcoding the same size.",
+        source.channel.channel.name, source.profile, source.level, request.video.profile, request.video.level);
+    }
+
+    if(exactChannel) {
+
+      channelProfile = exactChannel;
+      useTsb ||= !exactChannel.channel.isRtspEnabled;
+    }
+
     const channelRequest = resolveChannelRequest({
 
       isTranscoding,
@@ -846,7 +878,9 @@ export class ProtectStreamingDelegate implements CameraStreamingDelegate, Stream
     //
     // - Since we are using an already existing connection to the Protect controller, we don't need to create another connection which incurs an additional delay, as well
     //   as a resource hit on the Protect controller.
-    const tsBuffer: Nullable<Buffer> = useTsb ? (this.timeshift?.buffer.livePreload(this.probesize, { wholeWindow: isHighLatency }) ?? null) : null;
+    const sameBuffer = !exactChannel || ((this.timeshift?.buffer.channelProfile?.channel.id === exactChannel.channel.id) &&
+      (this.timeshift.buffer.channelProfile.lens === exactChannel.lens));
+    const tsBuffer: Nullable<Buffer> = useTsb && sameBuffer ? (this.timeshift?.buffer.livePreload(this.probesize, { wholeWindow: isHighLatency }) ?? null) : null;
 
     // Note what this live view starts from: the preload's size beside the probe size FFmpeg is given below, the floor the buffer holds a preload to unless the view
     // takes its whole window.

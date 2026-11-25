@@ -9,6 +9,7 @@
 import type { API, CameraRecordingConfiguration, CameraRecordingDelegate, HAP, RecordingPacket } from "homebridge";
 import { BackpressureWriter, HDSProtocolSpecificErrorReason, HKSV_TIMEOUT, guardedDispatch } from "homebridge-plugin-utils";
 import type { Clock, HomebridgePluginLogging, Nullable, RecordingProcess } from "homebridge-plugin-utils";
+import { NativeRecordingOptions, canCopyRecording, nativeRecordingFormat } from "./native-recording.ts";
 import { PROTECT_HKSV_SHADOW_FLOOR_MS, PROTECT_HKSV_SHADOW_RECONNECT_MS, PROTECT_HKSV_SHADOW_SAFETY_MS } from "../settings.ts";
 import type { ProtectTimeshiftBuffer, SegmentRole } from "./timeshift.ts";
 import { recordingAudioMatches, sampleRateHzOf } from "./stream-delegate.ts";
@@ -57,6 +58,7 @@ class RecordingSession {
 // Camera recording delegate implementation for Protect.
 export class ProtectRecordingDelegate implements CameraRecordingDelegate {
 
+  private copyingVideo = false;
   private _isRecording: boolean;
   private _isTransmitting: boolean;
   private abortController?: AbortController;
@@ -317,7 +319,10 @@ export class ProtectRecordingDelegate implements CameraRecordingDelegate {
           }
 
           // Pace segment delivery to HomeKit relative to the last yield, then yield the segment.
-          await this.paceSegmentDelivery(lastYieldTime, pacingInterval, combinedSignal);
+          if(!this.copyingVideo) {
+
+            await this.paceSegmentDelivery(lastYieldTime, pacingInterval, combinedSignal);
+          }
 
           // If the recording stream was closed while we were waiting on our pacing schedule, we're done. We check HAP's signal directly rather than the combined signal
           // because a discontinuity abort should not prevent yielding...the current segment is valid pre-stall data that must be delivered before restarting FFmpeg.
@@ -436,7 +441,20 @@ export class ProtectRecordingDelegate implements CameraRecordingDelegate {
     // test substitutes an FFmpeg-free double. The homebridge-plugin-utils process spawns the child synchronously on construction, so there is no separate start()
     // step...by the time create returns the FFmpeg child is already running. The recording options move into init.recording, the HomeKit recording configuration into
     // init.recordingConfig, and the debug flag into init.verbose.
-    this.ffmpegStream = this.protectCamera.platform.recordingProcessFactory.create(this.protectCamera.stream.ffmpegOptions, {
+    const options = this.protectCamera.stream.ffmpegOptions;
+
+    this.copyingVideo = !!alignment && !this.protectCamera.hints.crop && this.protectCamera.hasFeature("Video.HKSV.Recording.Native") &&
+      canCopyRecording(nativeRecordingFormat(this.timeshift.streamDescription, this.timeshift.channelProfile), this.recordingConfig,
+        this.protectCamera.hints.nativeRecordingBitratePair);
+
+    if(this.copyingVideo && this.protectCamera.hasFeature("Log.HKSV")) {
+
+      this.log.info("Recording native H.264 video using stream copy.");
+    }
+
+    const recordingOptions = this.copyingVideo ? new NativeRecordingOptions({ ...options.config, hardwareDecoding: false, hardwareTranscoding: false }) : options;
+
+    this.ffmpegStream = this.protectCamera.platform.recordingProcessFactory.create(recordingOptions, {
 
       recording: {
 
@@ -449,7 +467,9 @@ export class ProtectRecordingDelegate implements CameraRecordingDelegate {
         codec: this.protectCamera.ufp.videoCodec,
         enableAudio: this.isAudioActive,
         fps: this.timeshift.channelProfile.channel.fps,
-        timeshift: alignment?.seekOffsetMs ?? Math.max(this.timeshift.time - this.recordingConfig.prebufferLength, 0),
+        // A copy starts at the aligned keyframe. Seeking into its GOP would discard the first pictures.
+        probesize: this.copyingVideo ? 65536 : undefined,
+        timeshift: this.copyingVideo ? 0 : (alignment?.seekOffsetMs ?? Math.max(this.timeshift.time - this.recordingConfig.prebufferLength, 0)),
 
         // A recording copies the stream's audio untouched when the stream already is the AAC format HomeKit selected, and transcodes it to that format otherwise: an
         // Opus stream, a different rate, a second channel, or no readable audio track all transcode. The recording says nothing about which it did. Upstream types

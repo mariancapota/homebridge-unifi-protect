@@ -197,6 +197,7 @@ These option(s) apply to: Protect cameras.
 
 | Option                                                                                           | Description
 |--------------------------------------------------------------------------------------------------|-------------------------------------------------------------
+| <A NAME="Video.NativeLive"></A>`Video.NativeLive`                                                | Serve an exact native H.264 channel for local live views when available. **(default: disabled)**.
 | <A NAME="Video.FFmpeg.Path"></A>`Video.FFmpeg.Path=<value>`                                      | Path to the FFmpeg executable HBUP uses for streaming and recording. Default: the bundled FFmpeg build for your platform, or the first FFmpeg found in your path. **(default: none)**.
 | <A NAME="Video.Transcode.Hardware"></A>`Video.Transcode.Hardware`                                | Use hardware-accelerated transcoding when available (Apple Macs, Intel Quick Sync Video-enabled CPUs, Raspberry Pi 4). **(default: enabled)**.
 | <A NAME="Video.Transcode"></A>`Video.Transcode`                                                  | When streaming to low-latency clients (e.g. at home), transcode livestreams, instead of transmuxing them. **(default: enabled)**.
@@ -215,10 +216,12 @@ These option(s) apply to: Protect cameras.
 
 These option(s) apply to: Protect cameras.
 
-| Option                                                                       | Description
-|------------------------------------------------------------------------------|-------------------------------------------------------------
-| <A NAME="Video.HKSV.StatusLedIndicator"></A>`Video.HKSV.StatusLedIndicator`  | Use the camera status indicator light to show when an HKSV event is being recorded. **(default: disabled)**.
-| <A NAME="Video.HKSV.Recording.Switch"></A>`Video.HKSV.Recording.Switch`      | Add a switch accessory to enable or disable HKSV event recording. **(default: disabled)**.
+| Option                                                                                                   | Description
+|----------------------------------------------------------------------------------------------------------|-------------------------------------------------------------
+| <A NAME="Video.HKSV.Recording.Native"></A>`Video.HKSV.Recording.Native`                                  | Advertise the native recording channel and copy compatible H.264 events without video transcoding. **(default: disabled)**.
+| <A NAME="Video.HKSV.Recording.Native.BitratePair"></A>`Video.HKSV.Recording.Native.BitratePair=<value>`  | Allow a tested recording bitrate pair, in negotiated/source kbps (for example 1600/2000). Applies only to this exact pair when native recording is enabled. **(default: none)**.
+| <A NAME="Video.HKSV.StatusLedIndicator"></A>`Video.HKSV.StatusLedIndicator`                              | Use the camera status indicator light to show when an HKSV event is being recorded. **(default: disabled)**.
+| <A NAME="Video.HKSV.Recording.Switch"></A>`Video.HKSV.Recording.Switch`                                  | Add a switch accessory to enable or disable HKSV event recording. **(default: disabled)**.
 
 #### <A NAME="video.timeshift"></A>Timeshift Buffer
 

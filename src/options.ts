@@ -310,6 +310,8 @@ export const featureOptions: Record<string, FeatureOptionEntry<ProtectOptionMeta
   // Video options.
   "Video": [
 
+    { default: false, description: "Serve an exact native H.264 channel for local live views when available.", name: "NativeLive" },
+
     { default: false, defaultValue: "", description: "Path to the FFmpeg executable HBUP uses for streaming and recording. Default: the bundled FFmpeg build for your platform, or the first FFmpeg found in your path.", inputSize: 40, name: "FFmpeg.Path", scopes: ["global"] },
     { default: true, description: "Use hardware-accelerated transcoding when available (Apple Macs, Intel Quick Sync Video-enabled CPUs, Raspberry Pi 4).", name: "Transcode.Hardware" },
     { default: true, description: "When streaming to low-latency clients (e.g. at home), transcode livestreams, instead of transmuxing them.", name: "Transcode" },
@@ -327,6 +329,9 @@ export const featureOptions: Record<string, FeatureOptionEntry<ProtectOptionMeta
 
   // HomeKit Secure Video options.
   "Video.HKSV": [
+
+    { default: false, description: "Advertise the native recording channel and copy compatible H.264 events without video transcoding.", name: "Recording.Native" },
+    { default: false, defaultValue: "", description: "Allow a tested recording bitrate pair, in negotiated/source kbps (for example 1600/2000). Applies only to this exact pair when native recording is enabled.", group: "Recording.Native", name: "Recording.Native.BitratePair" },
 
     { default: false, description: "Use the camera status indicator light to show when an HKSV event is being recorded.", name: "StatusLedIndicator" },
     { default: false, description: "Add a switch accessory to enable or disable HKSV event recording.", name: "Recording.Switch" }
